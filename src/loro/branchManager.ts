@@ -214,7 +214,7 @@ export class BranchManager {
     return db.branches
       .where("noteId")
       .equals(noteId)
-      .filter((b) => b.name === name)
+      .filter((b: BranchRecord) => b.name === name)
       .first();
   }
 }
