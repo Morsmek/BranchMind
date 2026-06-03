@@ -26,27 +26,44 @@ export default function App() {
   const [initialized, setInitialized] = useState(false);
 
   useEffect(() => {
+    let canceled = false;
+    const timeout = setTimeout(() => {
+      if (!canceled) setInitialized(true);
+    }, 8000);
+
     async function init() {
-      await initPersistence();
-      await seedIfEmpty();
-      const store = getStore();
-      const ids = store.getRowIds("notes");
-      if (ids.length > 0) {
-        const firstId = ids[0];
-        const meta = getNoteMeta(firstId);
-        if (meta) {
-          setSelectedNoteId(firstId);
-          setBranchId(meta.currentBranchId || "");
-          const bm = new BranchManager();
-          const result = await bm.getBranchDocument(meta.currentBranchId);
-          if (result) {
-            setBranchName(result.branch.name);
+      try {
+        await initPersistence();
+        await seedIfEmpty();
+        if (canceled) return;
+        const store = getStore();
+        const ids = store.getRowIds("notes");
+        if (ids.length > 0) {
+          const firstId = ids[0];
+          const meta = getNoteMeta(firstId);
+          if (meta) {
+            setSelectedNoteId(firstId);
+            setBranchId(meta.currentBranchId || "");
+            const bm = new BranchManager();
+            const result = await bm.getBranchDocument(meta.currentBranchId);
+            if (result) {
+              setBranchName(result.branch.name);
+            }
           }
         }
+      } catch (e) {
+        console.error("Init failed:", e);
       }
-      setInitialized(true);
+      if (!canceled) {
+        clearTimeout(timeout);
+        setInitialized(true);
+      }
     }
     init();
+    return () => {
+      canceled = true;
+      clearTimeout(timeout);
+    };
   }, []);
 
   const handleSelectNote = useCallback(

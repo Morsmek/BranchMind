@@ -14,9 +14,9 @@ export async function seedIfEmpty(): Promise<void> {
 
   const bm = new BranchManager();
 
-  // Note 1: Inbox - zero-state note
-  const { noteId: n1, branchId: b1 } = await bm.createNote("");
-  {
+    // Note 1: Welcome
+    const { noteId: n1, branchId: b1 } = await bm.createNote("");
+    {
     const result = await bm.getBranchDocument(b1);
     if (result) {
       const doc = result.document;

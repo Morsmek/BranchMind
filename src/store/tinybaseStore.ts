@@ -38,15 +38,13 @@ export async function initPersistence(): Promise<void> {
   if (persisterInitialized) return;
   persisterInitialized = true;
 
-  const s = getStore();
-  const persister = createIndexedDbPersister(s, "BranchMindMeta");
-
   try {
+    const s = getStore();
+    const persister = createIndexedDbPersister(s, "BranchMindMeta");
     await persister.load();
-    await persister.startAutoSave();
-  } catch {
-    await persister.save();
-    await persister.startAutoSave();
+    persister.startAutoSave();
+  } catch (e) {
+    console.warn("Persistence init failed, running in-memory:", e);
   }
 }
 
