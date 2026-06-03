@@ -24,6 +24,28 @@ export default function App() {
   const [previewText, setPreviewText] = useState("");
   const [previewTimestamp, setPreviewTimestamp] = useState(0);
   const [initialized, setInitialized] = useState(false);
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("branchmind-theme");
+      if (saved === "dark" || saved === "light") return saved;
+      return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    }
+    return "light";
+  });
+  const [focusMode, setFocusMode] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  const toggleTheme = useCallback(() => {
+    setTheme((t) => {
+      const next = t === "light" ? "dark" : "light";
+      localStorage.setItem("branchmind-theme", next);
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
 
   useEffect(() => {
     let canceled = false;
@@ -60,123 +82,105 @@ export default function App() {
       }
     }
     init();
-    return () => {
-      canceled = true;
-      clearTimeout(timeout);
-    };
+    return () => { canceled = true; clearTimeout(timeout); };
   }, []);
 
-  const handleSelectNote = useCallback(
-    async (id: string) => {
-      setSelectedNoteId(id);
-      setViewMode("editor");
-      setPreviewText("");
-      const meta = getNoteMeta(id);
-      if (meta) {
-        setBranchId(meta.currentBranchId || "");
-        const bm = new BranchManager();
-        const result = await bm.getBranchDocument(meta.currentBranchId);
-        if (result) {
-          setBranchName(result.branch.name);
-        }
-      }
-    },
-    []
-  );
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && e.key === "k") { e.preventDefault(); setSearchOpen((v) => !v); }
+      if (mod && e.key === "b") { e.preventDefault(); setFocusMode((f) => !f); }
+      if (mod && e.key === "\\") { e.preventDefault(); setViewMode("merge"); }
+      if (e.key === "Escape") { setFocusMode(false); setSearchOpen(false); setViewMode("editor"); }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, []);
+
+  const handleSelectNote = useCallback(async (id: string) => {
+    setSelectedNoteId(id);
+    setViewMode("editor");
+    setPreviewText("");
+    setSearchOpen(false);
+    const meta = getNoteMeta(id);
+    if (meta) {
+      setBranchId(meta.currentBranchId || "");
+      const bm = new BranchManager();
+      const result = await bm.getBranchDocument(meta.currentBranchId);
+      if (result) setBranchName(result.branch.name);
+    }
+  }, []);
 
   const handleBranchChange = useCallback(
     (newBranchId: string, newBranchName: string) => {
       setBranchId(newBranchId);
       setBranchName(newBranchName);
-      if (selectedNoteId) {
-        updateNoteBranch(selectedNoteId, newBranchId);
-      }
+      if (selectedNoteId) updateNoteBranch(selectedNoteId, newBranchId);
     },
     [selectedNoteId]
   );
 
   const handleBranchFromHere = useCallback(
     async (frontiers: OpId[]) => {
-      const name = prompt("Branch name:", `branch-${Date.now().toString(36)}`);
+      const name = prompt("Branch name:", `idea-${Date.now().toString(36)}`);
       if (!name || !selectedNoteId) return;
-
       const bm = new BranchManager();
-      const newBranchId = await bm.branchFromCheckpoint(
-        branchId,
-        name,
-        frontiers
-      );
-      if (newBranchId) {
-        handleBranchChange(newBranchId, name);
-      }
+      const newId = await bm.branchFromCheckpoint(branchId, name, frontiers);
+      if (newId) handleBranchChange(newId, name);
     },
     [branchId, selectedNoteId, handleBranchChange]
   );
 
-  const handleTimeTravel = useCallback(
-    (text: string, timestamp: number) => {
-      setPreviewText(text);
-      setPreviewTimestamp(timestamp);
-      setViewMode("preview");
-    },
-    []
-  );
-
-  const handleCloseMerge = useCallback(() => {
-    setViewMode("editor");
-  }, []);
-
-  const handleMerged = useCallback(() => {
-    // refresh
+  const handleTimeTravel = useCallback((text: string, timestamp: number) => {
+    setPreviewText(text);
+    setPreviewTimestamp(timestamp);
+    setViewMode("preview");
   }, []);
 
   if (!initialized) {
     return (
       <div className="app-loading">
+        <div className="logo">B</div>
         <h1>BranchMind</h1>
-        <p>Loading...</p>
+        <p>Initializing your knowledge base...</p>
       </div>
     );
   }
 
   return (
-    <div className="app">
+    <div className={`app ${focusMode ? "focus-mode" : ""}`}>
       <header className="app-header">
-        <div className="app-title">
-          <h1>BranchMind</h1>
-          <span className="app-subtitle">
-            Version-controlled knowledge base
-          </span>
+        <div className="header-left">
+          <div className="header-logo">B</div>
+          <span className="header-title">BranchMind</span>
         </div>
         <div className="header-right">
           <div className="header-actions">
             <button
-              className={`view-btn ${viewMode === "editor" ? "active" : ""}`}
-              onClick={() => {
-                if (viewMode === "preview") setPreviewText("");
-                setViewMode("editor");
-              }}
+              className={`header-btn ${viewMode === "editor" ? "active" : ""}`}
+              onClick={() => { if (viewMode === "preview") setPreviewText(""); setViewMode("editor"); }}
+              title="Editor (Ctrl+\)"
             >
-              Editor
+              <span className="icon">&#x270E;</span> Edit
             </button>
             <button
-              className={`view-btn ${viewMode === "merge" ? "active" : ""}`}
+              className={`header-btn ${viewMode === "merge" ? "active" : ""}`}
               onClick={() => setViewMode("merge")}
+              title="Merge branches (Ctrl+\)"
             >
-              Merge
+              <span className="icon">&#x2B62;</span> Merge
             </button>
-            {viewMode === "preview" && (
-              <button
-                className="view-btn active"
-                onClick={() => {
-                  setPreviewText("");
-                  setViewMode("editor");
-                }}
-              >
-                Preview ({new Date(previewTimestamp).toLocaleTimeString()})
-              </button>
-            )}
+            <button
+              className={`header-btn ${focusMode ? "active" : ""}`}
+              onClick={() => setFocusMode((f) => !f)}
+              title="Focus mode (Ctrl+B)"
+            >
+              <span className="icon">&#x25A3;</span> Focus <span className="kbd">^B</span>
+            </button>
           </div>
+          <button className="theme-toggle" onClick={toggleTheme} title="Toggle theme">
+            {theme === "light" ? "\u263E" : "\u2600"}
+          </button>
           <OfflineBadge />
         </div>
       </header>
@@ -185,6 +189,7 @@ export default function App() {
         <NoteList
           selectedNoteId={selectedNoteId}
           onSelectNote={handleSelectNote}
+          searchOpen={searchOpen}
         />
 
         {selectedNoteId ? (
@@ -194,26 +199,21 @@ export default function App() {
                 noteId={selectedNoteId}
                 branchId={branchId}
                 branchName={branchName}
+                onBranchChange={handleBranchChange}
               />
             )}
 
             {viewMode === "preview" && (
               <div className="panel preview-panel">
-                <div className="panel-header">
-                  <h2>Preview</h2>
-                  <span className="preview-timestamp">
-                    {new Date(previewTimestamp).toLocaleString()}
+                <div className="preview-banner">
+                  <span className="preview-banner-text">
+                    &#x1F50D; Read-only preview from {new Date(previewTimestamp).toLocaleString()}
                   </span>
+                  <button className="header-btn" onClick={() => setViewMode("editor")}>
+                    Back to editing
+                  </button>
                 </div>
-                <div className="preview-content">
-                  {previewText
-                    .split("\n")
-                    .map((line, i) => (
-                      <div key={i} className="preview-line">
-                        {line || "\u00A0"}
-                      </div>
-                    ))}
-                </div>
+                <div className="preview-content">{previewText}</div>
               </div>
             )}
 
@@ -222,29 +222,44 @@ export default function App() {
                 noteId={selectedNoteId}
                 currentBranchId={branchId}
                 currentBranchName={branchName}
-                onClose={handleCloseMerge}
-                onMerged={handleMerged}
+                onClose={() => setViewMode("editor")}
+                onMerged={() => {}}
               />
             )}
 
             <Timeline
               branchId={branchId}
               noteId={selectedNoteId}
+              currentBranchName={branchName}
               onBranchFromHere={handleBranchFromHere}
               onTimeTravel={handleTimeTravel}
+              onSelectBranch={handleBranchChange}
             />
           </>
         ) : (
           <div className="panel empty-editor">
             <div className="empty-state">
-              <h2>BranchMind</h2>
-              <p>
-                Select a note from the list or create a new one to get started.
-              </p>
-              <p className="empty-hint">
-                Every note is version-controlled. Branch to explore. Merge to
-                combine.
-              </p>
+              <div className="empty-icon">&#x1F4DD;</div>
+              <h2>Welcome to BranchMind</h2>
+              <p>Select a note or create a new one. Every edit is versioned — branch, merge, and time-travel through your ideas.</p>
+              <div className="shortcuts">
+                <div className="shortcut-row">
+                  <span className="keys"><kbd>Ctrl</kbd>+<kbd>K</kbd></span>
+                  <span>Search notes</span>
+                </div>
+                <div className="shortcut-row">
+                  <span className="keys"><kbd>Ctrl</kbd>+<kbd>B</kbd></span>
+                  <span>Focus mode</span>
+                </div>
+                <div className="shortcut-row">
+                  <span className="keys"><kbd>Ctrl</kbd>+<kbd>\</kbd></span>
+                  <span>Merge branches</span>
+                </div>
+                <div className="shortcut-row">
+                  <span className="keys"><kbd>Ctrl</kbd>+<kbd>S</kbd></span>
+                  <span>Save note</span>
+                </div>
+              </div>
             </div>
           </div>
         )}

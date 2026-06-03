@@ -11,13 +11,48 @@ interface NoteEditorProps {
   noteId: string;
   branchId: string;
   branchName: string;
+  onBranchChange: (branchId: string, branchName: string) => void;
 }
 
-export function NoteEditor({
-  noteId,
-  branchId,
-  branchName,
-}: NoteEditorProps) {
+function renderLine(line: string): React.ReactNode {
+  if (!line) return "\u00A0";
+  if (/^#{1,6}\s/.test(line)) {
+    const level = line.match(/^(#{1,6})/)?.[1].length ?? 1;
+    const content = line.replace(/^#{1,6}\s/, "");
+    if (level === 1) return <h2>{renderInline(content)}</h2>;
+    if (level === 2) return <h3>{renderInline(content)}</h3>;
+    return <h4>{renderInline(content)}</h4>;
+  }
+  if (/^[-*]\s/.test(line)) {
+    return <span className="list-item">&bull; {renderInline(line.replace(/^[-*]\s/, ""))}</span>;
+  }
+  if (/^\d+\.\s/.test(line)) {
+    return <span className="list-item">{renderInline(line)}</span>;
+  }
+  if (/^```/.test(line)) return <code>{line.replace(/^```/, "")}</code>;
+  if (/^---$/.test(line)) return <hr />;
+  if (line.startsWith("> ")) return <em>{renderInline(line.slice(2))}</em>;
+  return <span>{renderInline(line)}</span>;
+}
+
+function renderInline(text: string): React.ReactNode {
+  const parts = text.split(/(\*\*.*?\*\*|__.*?__|\*.*?\*|_.*?_|`.*?`)/g);
+  return parts.map((part, i) => {
+    if (/^\*\*.*\*\*$/.test(part) || /^__.*__$/.test(part))
+      return <strong key={i}>{part.slice(2, -2)}</strong>;
+    if (/^\*.*\*$/.test(part) || /^_.*_$/.test(part))
+      return <em key={i}>{part.slice(1, -1)}</em>;
+    if (/^`.*`$/.test(part))
+      return <code key={i}>{part.slice(1, -1)}</code>;
+    return part;
+  });
+}
+
+function countWords(text: string): number {
+  return text.trim() ? text.trim().split(/\s+/).length : 0;
+}
+
+export function NoteEditor({ noteId, branchId, branchName }: NoteEditorProps) {
   const [doc, setDoc] = useState<NoteDocument | null>(null);
   const [text, setText] = useState("");
   const [title, setTitle] = useState("");
@@ -25,6 +60,7 @@ export function NoteEditor({
   const [saving, setSaving] = useState(false);
   const [editMode, setEditMode] = useState(true);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const lastSavedRef = useRef(0);
 
   const loadDocument = useCallback(async () => {
     const bm = new BranchManager();
@@ -32,6 +68,7 @@ export function NoteEditor({
     if (result) {
       setDoc(result.document);
       setText(result.document.text);
+      lastSavedRef.current = Date.now();
       const meta = getNoteMeta(noteId);
       if (meta) {
         setTitle(meta.title || "");
@@ -45,41 +82,35 @@ export function NoteEditor({
     }
   }, [noteId, branchId]);
 
-  useEffect(() => {
-    loadDocument();
-  }, [loadDocument]);
+  useEffect(() => { loadDocument(); }, [loadDocument]);
 
   const saveDocument = useCallback(async () => {
-    if (!doc) return;
+    if (!doc || text === doc.text) return;
     setSaving(true);
     const bm = new BranchManager();
     doc.setText(text);
     doc.commit();
     await bm.saveBranchDocument(branchId, doc);
-
     if (title) updateStoreTitle(noteId, title);
-
-    const parsedTags = tagsInput
-      .split(",")
-      .map((t) => t.trim())
-      .filter(Boolean);
+    const parsedTags = tagsInput.split(",").map((t) => t.trim()).filter(Boolean);
     updateStoreTags(noteId, parsedTags);
-
+    lastSavedRef.current = Date.now();
     setSaving(false);
   }, [doc, text, title, tagsInput, branchId, noteId]);
 
   useEffect(() => {
     const handle = setInterval(() => {
       if (doc && text !== doc.text) {
-        saveDocument();
+        setSaving(true);
+        saveDocument().then(() => setSaving(false));
       }
-    }, 3000);
+    }, 2000);
     return () => clearInterval(handle);
   }, [doc, text, saveDocument]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
         e.preventDefault();
         saveDocument();
       }
@@ -88,43 +119,40 @@ export function NoteEditor({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [saveDocument]);
 
+  const wordCount = countWords(text);
+  const charCount = text.length;
+
   if (!doc) {
     return (
       <div className="panel editor-panel">
-        <div className="panel-header">
-          <h2>Editor</h2>
-        </div>
-        <div className="empty-state">Loading note...</div>
+        <div className="empty-state"><p>Loading...</p></div>
       </div>
     );
   }
 
   return (
     <div className="panel editor-panel">
-      <div className="editor-header">
-        <div className="branch-indicator">
-          <span className="branch-icon">&#x2387;</span>
-          <span className="branch-name">{branchName}</span>
-        </div>
-        <div className="editor-actions">
+      <div className="editor-toolbar">
+        <div className="toolbar-left">
+          <div className="branch-indicator">
+            <span className="branch-dot" />
+            {branchName}
+          </div>
           <button
-            className={`mode-toggle ${editMode ? "active" : ""}`}
+            className={`toolbar-btn ${editMode ? "active" : ""}`}
             onClick={() => setEditMode(true)}
-            title="Edit mode"
           >
-            Edit
+            Write
           </button>
           <button
-            className={`mode-toggle ${!editMode ? "active" : ""}`}
-            onClick={() => {
-              saveDocument();
-              setEditMode(false);
-            }}
-            title="Preview mode"
+            className={`toolbar-btn ${!editMode ? "active" : ""}`}
+            onClick={() => { saveDocument(); setEditMode(false); }}
           >
             Preview
           </button>
-          {saving && <span className="saving-indicator">Saving...</span>}
+        </div>
+        <div className="toolbar-right">
+          {saving && <span className="saving-indicator">Saving</span>}
         </div>
       </div>
 
@@ -135,14 +163,14 @@ export function NoteEditor({
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           onBlur={() => saveDocument()}
-          placeholder="Note title..."
+          placeholder="Untitled"
         />
         <input
           className="tags-input"
           type="text"
           value={tagsInput}
           onChange={(e) => setTagsInput(e.target.value)}
-          placeholder="Tags (comma separated)..."
+          placeholder="Add tags, comma separated..."
         />
       </div>
 
@@ -157,47 +185,27 @@ export function NoteEditor({
         />
       ) : (
         <div className="editor-preview">
-          {text
-            .split("\n")
-            .map((line, i) => (
-              <div key={i} className="preview-line">
-                {renderLine(line)}
-              </div>
-            ))}
+          {text.split("\n").map((line, i) => (
+            <div key={i} className="preview-line">
+              {renderLine(line)}
+            </div>
+          ))}
         </div>
       )}
+
+      <div className="status-bar">
+        <div className="status-item">{charCount} chars &middot; {wordCount} words</div>
+        <div className="status-item">
+          {saving ? "Saving..." : lastSavedRef.current ? `Saved ${formatRelative(lastSavedRef.current)}` : ""}
+        </div>
+      </div>
     </div>
   );
 }
 
-function renderLine(line: string): React.ReactNode {
-  if (line.startsWith("### ")) {
-    return <h4>{line.slice(4)}</h4>;
-  }
-  if (line.startsWith("## ")) {
-    return <h3>{line.slice(3)}</h3>;
-  }
-  if (line.startsWith("# ")) {
-    return <h2>{line.slice(2)}</h2>;
-  }
-  if (line.startsWith("- ")) {
-    return <span className="list-item">&bull; {line.slice(2)}</span>;
-  }
-  if (line.startsWith("1. ") || line.startsWith("2. ") || line.startsWith("3. ") || line.startsWith("4. ")) {
-    return <span className="list-item">{line}</span>;
-  }
-  if (line.trim() === "") {
-    return <br />;
-  }
-  return <span>{renderInline(line)}</span>;
-}
-
-function renderInline(text: string): React.ReactNode {
-  const parts = text.split(/(\*\*.*?\*\*)/g);
-  return parts.map((part, i) => {
-    if (part.startsWith("**") && part.endsWith("**")) {
-      return <strong key={i}>{part.slice(2, -2)}</strong>;
-    }
-    return part;
-  });
+function formatRelative(ms: number): string {
+  const diff = (Date.now() - ms) / 1000;
+  if (diff < 5) return "just now";
+  if (diff < 60) return `${Math.floor(diff)}s ago`;
+  return `${Math.floor(diff / 60)}m ago`;
 }
