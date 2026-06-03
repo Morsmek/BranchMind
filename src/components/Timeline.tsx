@@ -10,6 +10,7 @@ interface TimelineProps {
   onBranchFromHere: (frontiers: OpId[]) => void;
   onTimeTravel: (text: string, timestamp: number) => void;
   onSelectBranch: (branchId: string, branchName: string) => void;
+  children?: React.ReactNode;
 }
 
 function formatRelativeTime(ts: number): string {
@@ -38,6 +39,7 @@ export function Timeline({
   onBranchFromHere,
   onTimeTravel,
   onSelectBranch,
+  children,
 }: TimelineProps) {
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
   const [branches, setBranches] = useState<{ id: string; name: string; parentId: string | null }[]>([]);
@@ -96,6 +98,8 @@ export function Timeline({
           ))}
         </div>
       )}
+
+      {children}
 
       <div className="timeline-section-label">
         <span>Versions</span>

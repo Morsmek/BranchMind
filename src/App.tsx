@@ -5,6 +5,10 @@ import { NoteList } from "./components/NoteList";
 import { NoteEditor } from "./components/NoteEditor";
 import { Timeline } from "./components/Timeline";
 import { MergeView } from "./components/MergeView";
+import { CommandPalette } from "./components/CommandPalette";
+import { ToastContainer } from "./components/Toast";
+import { BranchGraph } from "./components/BranchGraph";
+import { useToast, toast } from "./hooks/useToast";
 import {
   getStore,
   getNoteMeta,
@@ -33,7 +37,8 @@ export default function App() {
     return "light";
   });
   const [focusMode, setFocusMode] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const { toasts, removeToast } = useToast();
 
   const toggleTheme = useCallback(() => {
     setTheme((t) => {
@@ -68,9 +73,7 @@ export default function App() {
             setBranchId(meta.currentBranchId || "");
             const bm = new BranchManager();
             const result = await bm.getBranchDocument(meta.currentBranchId);
-            if (result) {
-              setBranchName(result.branch.name);
-            }
+            if (result) setBranchName(result.branch.name);
           }
         }
       } catch (e) {
@@ -88,20 +91,24 @@ export default function App() {
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
-      if (mod && e.key === "k") { e.preventDefault(); setSearchOpen((v) => !v); }
+      if (mod && e.key === "k") { e.preventDefault(); setPaletteOpen((v) => !v); }
       if (mod && e.key === "b") { e.preventDefault(); setFocusMode((f) => !f); }
       if (mod && e.key === "\\") { e.preventDefault(); setViewMode("merge"); }
-      if (e.key === "Escape") { setFocusMode(false); setSearchOpen(false); setViewMode("editor"); }
+      if (e.key === "Escape") {
+        if (paletteOpen) { setPaletteOpen(false); return; }
+        setFocusMode(false);
+        setViewMode("editor");
+      }
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, []);
+  }, [paletteOpen]);
 
   const handleSelectNote = useCallback(async (id: string) => {
     setSelectedNoteId(id);
     setViewMode("editor");
     setPreviewText("");
-    setSearchOpen(false);
+    setPaletteOpen(false);
     const meta = getNoteMeta(id);
     if (meta) {
       setBranchId(meta.currentBranchId || "");
@@ -116,6 +123,7 @@ export default function App() {
       setBranchId(newBranchId);
       setBranchName(newBranchName);
       if (selectedNoteId) updateNoteBranch(selectedNoteId, newBranchId);
+      toast(`Switched to branch "${newBranchName}"`, "info");
     },
     [selectedNoteId]
   );
@@ -126,7 +134,10 @@ export default function App() {
       if (!name || !selectedNoteId) return;
       const bm = new BranchManager();
       const newId = await bm.branchFromCheckpoint(branchId, name, frontiers);
-      if (newId) handleBranchChange(newId, name);
+      if (newId) {
+        handleBranchChange(newId, name);
+        toast(`Created branch "${name}"`, "success");
+      }
     },
     [branchId, selectedNoteId, handleBranchChange]
   );
@@ -136,6 +147,40 @@ export default function App() {
     setPreviewTimestamp(timestamp);
     setViewMode("preview");
   }, []);
+
+  const handleExportNote = useCallback((noteId: string) => {
+    if (!noteId) return;
+    const meta = getNoteMeta(noteId);
+    if (!meta) return;
+    let noteTags: string[] = [];
+    try { noteTags = JSON.parse(meta.tags || "[]"); } catch {}
+    const bm = new BranchManager();
+    bm.getBranchDocument(meta.currentBranchId).then((result) => {
+      if (result) {
+        const content = noteTags.length
+          ? `---\ntags: [${noteTags.join(", ")}]\n---\n\n${result.document.text}`
+          : result.document.text;
+        const blob = new Blob([content], { type: "text/markdown" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${(meta.title || "note").replace(/[^a-z0-9]/gi, "_").slice(0, 50)}.md`;
+        a.click();
+        URL.revokeObjectURL(url);
+        toast(`Exported "${meta.title}"`, "success");
+      }
+    });
+  }, []);
+
+  const handleNoteDeleted = useCallback(() => {
+    setSelectedNoteId("");
+    const store = getStore();
+    const ids = store.getRowIds("notes");
+    if (ids.length > 0) {
+      const id = ids[0];
+      handleSelectNote(id);
+    }
+  }, [handleSelectNote]);
 
   if (!initialized) {
     return (
@@ -149,6 +194,20 @@ export default function App() {
 
   return (
     <div className={`app ${focusMode ? "focus-mode" : ""}`}>
+      <CommandPalette
+        open={paletteOpen}
+        selectedNoteId={selectedNoteId}
+        onClose={() => setPaletteOpen(false)}
+        onSelectNote={handleSelectNote}
+        onSelectBranch={handleBranchChange}
+        onFocusMode={() => setFocusMode((f) => !f)}
+        onMergeMode={() => setViewMode("merge")}
+        onExportNote={handleExportNote}
+        focusMode={focusMode}
+      />
+
+      <ToastContainer toasts={toasts} onRemove={removeToast} />
+
       <header className="app-header">
         <div className="header-left">
           <div className="header-logo">B</div>
@@ -159,21 +218,24 @@ export default function App() {
             <button
               className={`header-btn ${viewMode === "editor" ? "active" : ""}`}
               onClick={() => { if (viewMode === "preview") setPreviewText(""); setViewMode("editor"); }}
-              title="Editor (Ctrl+\)"
             >
               <span className="icon">&#x270E;</span> Edit
             </button>
             <button
               className={`header-btn ${viewMode === "merge" ? "active" : ""}`}
               onClick={() => setViewMode("merge")}
-              title="Merge branches (Ctrl+\)"
             >
-              <span className="icon">&#x2B62;</span> Merge
+              <span className="icon">&#x2B62;</span> Merge <span className="kbd">^\</span>
+            </button>
+            <button
+              className={`header-btn ${paletteOpen ? "active" : ""}`}
+              onClick={() => setPaletteOpen((v) => !v)}
+            >
+              <span className="icon">&#x2318;</span> Command <span className="kbd">^K</span>
             </button>
             <button
               className={`header-btn ${focusMode ? "active" : ""}`}
               onClick={() => setFocusMode((f) => !f)}
-              title="Focus mode (Ctrl+B)"
             >
               <span className="icon">&#x25A3;</span> Focus <span className="kbd">^B</span>
             </button>
@@ -189,7 +251,7 @@ export default function App() {
         <NoteList
           selectedNoteId={selectedNoteId}
           onSelectNote={handleSelectNote}
-          searchOpen={searchOpen}
+          searchOpen={paletteOpen}
         />
 
         {selectedNoteId ? (
@@ -200,6 +262,7 @@ export default function App() {
                 branchId={branchId}
                 branchName={branchName}
                 onBranchChange={handleBranchChange}
+                onNoteDeleted={handleNoteDeleted}
               />
             )}
 
@@ -223,7 +286,7 @@ export default function App() {
                 currentBranchId={branchId}
                 currentBranchName={branchName}
                 onClose={() => setViewMode("editor")}
-                onMerged={() => {}}
+                onMerged={() => toast("Branches merged successfully", "success")}
               />
             )}
 
@@ -234,7 +297,13 @@ export default function App() {
               onBranchFromHere={handleBranchFromHere}
               onTimeTravel={handleTimeTravel}
               onSelectBranch={handleBranchChange}
-            />
+            >
+              <BranchGraph
+                noteId={selectedNoteId}
+                currentBranchId={branchId}
+                onSelectBranch={handleBranchChange}
+              />
+            </Timeline>
           </>
         ) : (
           <div className="panel empty-editor">
@@ -243,22 +312,11 @@ export default function App() {
               <h2>Welcome to BranchMind</h2>
               <p>Select a note or create a new one. Every edit is versioned — branch, merge, and time-travel through your ideas.</p>
               <div className="shortcuts">
-                <div className="shortcut-row">
-                  <span className="keys"><kbd>Ctrl</kbd>+<kbd>K</kbd></span>
-                  <span>Search notes</span>
-                </div>
-                <div className="shortcut-row">
-                  <span className="keys"><kbd>Ctrl</kbd>+<kbd>B</kbd></span>
-                  <span>Focus mode</span>
-                </div>
-                <div className="shortcut-row">
-                  <span className="keys"><kbd>Ctrl</kbd>+<kbd>\</kbd></span>
-                  <span>Merge branches</span>
-                </div>
-                <div className="shortcut-row">
-                  <span className="keys"><kbd>Ctrl</kbd>+<kbd>S</kbd></span>
-                  <span>Save note</span>
-                </div>
+                <div className="shortcut-row"><span className="keys"><kbd>Ctrl</kbd>+<kbd>K</kbd></span><span>Command palette</span></div>
+                <div className="shortcut-row"><span className="keys"><kbd>Ctrl</kbd>+<kbd>B</kbd></span><span>Focus mode</span></div>
+                <div className="shortcut-row"><span className="keys"><kbd>Ctrl</kbd>+<kbd>\</kbd></span><span>Merge branches</span></div>
+                <div className="shortcut-row"><span className="keys"><kbd>Ctrl</kbd>+<kbd>S</kbd></span><span>Save note</span></div>
+                <div className="shortcut-row"><span className="keys"><kbd>Ctrl</kbd>+<kbd>Z</kbd></span><span>Undo</span></div>
               </div>
             </div>
           </div>
